@@ -13,6 +13,7 @@ import (
 	"os/user"
 	"reflect"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -124,6 +125,10 @@ func init() {
 		}
 	}
 
+	if -1 == strings.Index(config.Postmaster, "@") {
+		config.Postmaster += "@" + config.Hostname
+	}
+
 	flag.BoolVar(&config.Verbose, "v", config.Verbose, "Enable verbose mode")
 	flag.StringVar(&config.ConfigFile, "C", config.ConfigFile, "Use alternate configuration file")
 	flag.StringVar(&config.Message_From, "f", config.Message_From, "Manually specify the sender-address of the email")
@@ -148,14 +153,6 @@ func compose() string {
 
 	if 0 == len(m.Header["From"]) {
 		m.Header["From"] = []string{(&mail.Address{config.Message_FromName, config.Message_From}).String()}
-	}
-
-	for i, to := range config.Message_To {
-		// For local users
-		at := []byte{'@'}
-		if -1 == bytes.IndexByte([]byte(to), at[0]) {
-			config.Message_To[i] = config.Postmaster
-		}
 	}
 
 	if 0 == len(m.Header["To"]) {
@@ -281,8 +278,14 @@ func main() {
 	if flag.NArg() == 0 {
 		fmt.Fprintln(os.Stderr, "Error: no recipients supplied")
 		os.Exit(1)
-	} else {
-		config.Message_To = flag.Args()
+	}
+
+	// Map all local users to Postmaster address
+	config.Message_To = flag.Args()
+	for i, to := range config.Message_To {
+		if -1 == strings.Index(to, "@") {
+			config.Message_To[i] = config.Postmaster
+		}
 	}
 
 	if err := config.ParseFile(config.ConfigFile); err != nil {
