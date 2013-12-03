@@ -1,54 +1,58 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
+	"math/rand"
+	"net/mail"
 	"net/smtp"
 	"net/textproto"
-	"net/mail"
-	"time"
-	"bufio"
 	"os"
 	"os/user"
-	"regexp"
-	"crypto/rand"
-	"bytes"
 	"reflect"
+	"regexp"
+	"time"
 )
 
 var config = &Configuration{
-	ConfigFile: "/etc/go-ssmtp.conf",
-	Port: 25,
-	Postmaster: "postmaster",
-	Verbose: false,
+	ConfigFile:	"/etc/go-ssmtp.ini",
+	Port:		25,
+	Postmaster:	"postmaster",
+	Verbose:	false,
 }
 
-type Configuration struct{
-	ConfigFile string
-	Verbose bool
-	Hostname  string
-	Server string
-	Port int
-	Postmaster string
-	Authentication_User string
-	Authentication_Password string
-	Authentication_Identity string
-	Authentication_Mechanism string
-	Authentication_ForceStartTLS bool
-	Message_To []string
-	Message_From string
-	Message_FromName string
-	Message_Bcc string
+type Configuration struct {
+	ConfigFile						string
+	Verbose							bool
+	Hostname						string
+	Server							string
+	Port							int
+	Postmaster						string
+	Authentication_User				string
+	Authentication_Password			string
+	Authentication_Identity			string
+	Authentication_Mechanism		string
+	Authentication_ForceStartTLS	bool
+	Message_To						[]string
+	Message_From					string
+	Message_FromName				string
+	Message_Bcc						string
 }
 
 func generateMessageId() string {
 	const CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-	var bytes = make([]byte, 16)
-	rand.Read(bytes)
-	for i, b := range bytes {
-		bytes[i] = CHARS[b % byte(len(CHARS))]
+	bytes, i, r := make([]byte, 16), 0, rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	for {
+		bytes[i] = CHARS[r.Intn(len(CHARS))]
+		i++
+
+		if i == len(bytes) {
+			return string(bytes)
+		}
 	}
-	return string(bytes)
 }
 
 func (c *Configuration) ParseFile(file string) error {
@@ -78,7 +82,7 @@ func (c *Configuration) ParseFile(file string) error {
 			k, v := parts[1], parts[2]
 
 			if section != "" {
-				k = section +"_"+ k
+				k = section + "_" + k
 			}
 
 			if !c.Get(k).IsValid() {
@@ -86,7 +90,7 @@ func (c *Configuration) ParseFile(file string) error {
 			} else if "string" == config.Get(k).Type().String() {
 				c.Get(k).SetString(v)
 			} else if "bool" == config.Get(k).Type().String() {
-				c.Get(k).SetBool("1"==v)
+				c.Get(k).SetBool("1" == v)
 			}
 		} else {
 			return fmt.Errorf("Failed to parse config, line %d: %s", n, l)
@@ -98,7 +102,7 @@ func (c *Configuration) ParseFile(file string) error {
 	return nil
 }
 
-func (c *Configuration) Get(k string) reflect.Value{
+func (c *Configuration) Get(k string) reflect.Value {
 	r := reflect.ValueOf(c)
 	return reflect.Indirect(r).FieldByName(k)
 }
@@ -110,32 +114,20 @@ func init() {
 		config.Hostname = "localhost"
 	}
 
-	var defaultFrom, defaultName = "", ""
 	if u, err := user.Current(); err == nil {
-		defaultFrom = u.Username +"@"+ config.Hostname
+		config.Message_From = u.Username + "@" + config.Hostname
 
 		if u.Name != "" {
-			defaultName = u.Name
+			config.Message_FromName = u.Name
 		} else {
-			defaultName = u.Username
+			config.Message_FromName = u.Username
 		}
 	}
 
-	flag.BoolVar(&config.Verbose, "v", false, "Enable verbose mode")
-	flag.StringVar(&config.Authentication_Mechanism, "am", "", "Mechanism for SMTP authentication")
-	flag.StringVar(&config.Authentication_User, "au", "", "Username for SMTP authentication")
-	flag.StringVar(&config.Authentication_Password, "ap", "", "Password for SMTP authentication")
-	flag.StringVar(&config.ConfigFile, "C", "", "Use alternate configuration file")
-	flag.StringVar(&config.Message_From, "f", defaultFrom, "Manually specify the sender-address of the email")
-	flag.StringVar(&config.Message_FromName, "F", defaultName, "Manually specify the sender-name of the email")
-	flag.Parse()
-
-	if flag.NArg() == 0 {
-		fmt.Fprintln(os.Stderr, "Error: no recipients supplied")
-		os.Exit(1)
-	} else {
-		config.Message_To = flag.Args()
-	}
+	flag.BoolVar(&config.Verbose, "v", config.Verbose, "Enable verbose mode")
+	flag.StringVar(&config.ConfigFile, "C", config.ConfigFile, "Use alternate configuration file")
+	flag.StringVar(&config.Message_From, "f", config.Message_From, "Manually specify the sender-address of the email")
+	flag.StringVar(&config.Message_FromName, "F", config.Message_FromName, "Manually specify the sender-name of the email")
 }
 
 func compose() string {
@@ -150,12 +142,20 @@ func compose() string {
 		// Assume there are no headers in the message
 		m = &mail.Message{
 			Header: mail.Header(textproto.MIMEHeader{}),
-			Body: bufio.NewReader(bytes.NewBufferString(msg)),
+			Body:   bufio.NewReader(bytes.NewBufferString(msg)),
 		}
 	}
 
 	if 0 == len(m.Header["From"]) {
 		m.Header["From"] = []string{(&mail.Address{config.Message_FromName, config.Message_From}).String()}
+	}
+
+	for i, to := range config.Message_To {
+		// For local users
+		at := []byte{'@'}
+		if -1 == bytes.IndexByte([]byte(to), at[0]) {
+			config.Message_To[i] = config.Postmaster
+		}
 	}
 
 	if 0 == len(m.Header["To"]) {
@@ -167,20 +167,20 @@ func compose() string {
 	}
 
 	if 0 == len(m.Header["Message-ID"]) {
-		m.Header["Message-Id"] = []string{ "<GOSSMTP."+ generateMessageId() +"@"+ config.Hostname +">"}
+		m.Header["Message-Id"] = []string{"<GOSSMTP." + generateMessageId() + "@" + config.Hostname + ">"}
 	}
 
 	var s = ""
 	for k, h := range m.Header {
 		for _, v := range h {
-			s += k +": "+ v +"\r\n"
+			s += k + ": " + v + "\r\n"
 		}
 	}
 
 	c := bytes.Buffer{}
 	c.ReadFrom(m.Body)
 
-	return s + "\r\n"+ c.String()
+	return s + "\r\n" + c.String()
 }
 
 func send(msg string) error {
@@ -203,40 +203,40 @@ func send(msg string) error {
 	}
 
 	switch config.Authentication_Mechanism {
-		case "CRAM-MD5":
-			auth := smtp.CRAMMD5Auth(
-				config.Authentication_User,
-				config.Authentication_Password,
-			)
+	case "CRAM-MD5":
+		auth := smtp.CRAMMD5Auth(
+			config.Authentication_User,
+			config.Authentication_Password,
+		)
 
-			if ok, _ := c.Extension("AUTH"); ok {
-				if err = c.Auth(auth); err != nil {
-					return fmt.Errorf("while authenticating: %s", err)
-				} else if config.Verbose {
-					return fmt.Errorf("Info: using authentication: CRAM-MD5")
-				}
+		if ok, _ := c.Extension("AUTH"); ok {
+			if err = c.Auth(auth); err != nil {
+				return fmt.Errorf("while authenticating: %s", err)
+			} else if config.Verbose {
+				return fmt.Errorf("Info: using authentication: CRAM-MD5")
 			}
+		}
 
-		case "PLAIN":
-			auth := smtp.PlainAuth(
-				config.Authentication_Identity,
-				config.Authentication_User,
-				config.Authentication_Password,
-				config.Server,
-			)
+	case "PLAIN":
+		auth := smtp.PlainAuth(
+			config.Authentication_Identity,
+			config.Authentication_User,
+			config.Authentication_Password,
+			config.Server,
+		)
 
-			if ok, _ := c.Extension("AUTH"); ok {
-				if err = c.Auth(auth); err != nil {
-					return fmt.Errorf("while authenticating: %s", err)
-				} else if config.Verbose {
-					fmt.Println("Info: using authentication: PLAIN")
-				}
+		if ok, _ := c.Extension("AUTH"); ok {
+			if err = c.Auth(auth); err != nil {
+				return fmt.Errorf("while authenticating: %s", err)
+			} else if config.Verbose {
+				fmt.Println("Info: using authentication: PLAIN")
 			}
+		}
 
-		default:
-			if config.Verbose {
-				fmt.Println("Info: not using authentication")
-			}
+	default:
+		if config.Verbose {
+			fmt.Println("Info: not using authentication")
+		}
 	}
 
 	if err = c.Mail(config.Message_From); err != nil {
@@ -276,9 +276,18 @@ func send(msg string) error {
 }
 
 func main() {
+	flag.Parse()
+
+	if flag.NArg() == 0 {
+		fmt.Fprintln(os.Stderr, "Error: no recipients supplied")
+		os.Exit(1)
+	} else {
+		config.Message_To = flag.Args()
+	}
+
 	if err := config.ParseFile(config.ConfigFile); err != nil {
 		fmt.Fprintf(os.Stderr, "Error while parsing configuration: %s\n", err)
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	if config.Verbose {
@@ -289,7 +298,7 @@ func main() {
 
 	if err := send(msg); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
-		os.Exit(1)
+		os.Exit(3)
 	} else if config.Verbose {
 		fmt.Println("Info: send successful")
 	}
