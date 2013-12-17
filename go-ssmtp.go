@@ -160,7 +160,7 @@ func compose() string {
 	}
 
 	if 0 == len(m.Header["Date"]) {
-		m.Header["Date"] = []string{time.Now().String()}
+		m.Header["Date"] = []string{time.Now().Format("Mon, 2 Jan 2006 15:04:05 -0700")}
 	}
 
 	if 0 == len(m.Header["Message-ID"]) {
