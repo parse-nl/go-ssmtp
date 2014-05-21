@@ -18,28 +18,31 @@ import (
 )
 
 var config = &Configuration{
-	ConfigFile:	"/etc/go-ssmtp.ini",
-	Port:		25,
-	Postmaster:	"postmaster",
-	Verbose:	false,
+	Verbose:     false,
+	ConfigFile:  "/etc/go-ssmtp.ini",
+	Port:        25,
+	Server:      "127.0.0.1",
+	Postmaster:  "postmaster",
+	ScanMessage: false,
 }
 
 type Configuration struct {
-	ConfigFile						string
-	Verbose							bool
-	Hostname						string
-	Server							string
-	Port							int
-	Postmaster						string
-	Authentication_User				string
-	Authentication_Password			string
-	Authentication_Identity			string
-	Authentication_Mechanism		string
-	Authentication_ForceStartTLS	bool
-	Message_To						[]string
-	Message_From					string
-	Message_FromName				string
-	Message_Bcc						string
+	Verbose                      bool
+	ConfigFile                   string
+	Hostname                     string
+	Server                       string
+	Port                         int
+	Postmaster                   string
+	ScanMessage                  bool
+	Authentication_User          string
+	Authentication_Password      string
+	Authentication_Identity      string
+	Authentication_Mechanism     string
+	Authentication_ForceStartTLS bool
+	Message_To                   []string
+	Message_Bcc                  []string
+	Message_From                 string
+	Message_FromName             string
 }
 
 func generateMessageId() string {
@@ -133,22 +136,53 @@ func init() {
 	flag.StringVar(&config.ConfigFile, "C", config.ConfigFile, "Use alternate configuration file")
 	flag.StringVar(&config.Message_From, "f", config.Message_From, "Manually specify the sender-address of the email")
 	flag.StringVar(&config.Message_FromName, "F", config.Message_FromName, "Manually specify the sender-name of the email")
+	flag.BoolVar(&config.ScanMessage, "t", config.ScanMessage, "Scan message for receipients")
 }
 
 func compose() string {
-	// Make sure we can re-use Stdin even after being consumed
+	// Make sure we can re-use Stdin even after being consumed by mail.ReadMessage
 	b := bytes.Buffer{}
 	b.ReadFrom(os.Stdin)
 	msg := b.String()
-	r := bytes.NewBufferString(msg)
 
+	r := bytes.NewBufferString(msg)
 	m, err := mail.ReadMessage(r)
 	if err != nil {
+		if config.ScanMessage {
+			fmt.Fprintln(os.Stderr, "ScanMessage: cannot parse message")
+		}
+
 		// Assume there are no headers in the message
 		m = &mail.Message{
 			Header: mail.Header(textproto.MIMEHeader{}),
 			Body:   bufio.NewReader(bytes.NewBufferString(msg)),
 		}
+	}
+
+	if config.ScanMessage {
+		var hasRcpt = false
+
+		if 0 != len(m.Header["To"]) {
+			config.Message_To = m.Header["To"]
+			hasRcpt = true
+		}
+
+		if 0 == len(m.Header["Bcc"]) {
+			config.Message_To = m.Header["Bcc"]
+			hasRcpt = true
+		}
+
+		if 0 == len(m.Header["Cc"]) {
+			config.Message_To = m.Header["Cc"]
+			hasRcpt = true
+		}
+
+		if !hasRcpt {
+			fmt.Fprintln(os.Stderr, "ScanMessage: No recipients found in message-body")
+			hasRcpt = true
+		}
+
+		config.Message_To = m.Header["To"]
 	}
 
 	if 0 == len(m.Header["From"]) {
@@ -184,7 +218,7 @@ func send(msg string) error {
 	c, err := smtp.Dial(fmt.Sprintf("%s:%d", config.Server, config.Port))
 
 	if err != nil {
-		return fmt.Errorf("while connecting to %s on port %s: %s", config.Server, config.Port, err)
+		return fmt.Errorf("while connecting to %s on port %d: %s", config.Server, config.Port, err)
 	}
 
 	if err := c.Hello(config.Hostname); err != nil {
@@ -240,15 +274,15 @@ func send(msg string) error {
 		return fmt.Errorf("while setting From `%s`: %s", config.Message_From, err)
 	}
 
-	if config.Message_Bcc != "" {
-		if err = c.Rcpt(config.Message_Bcc); err != nil {
-			return fmt.Errorf("while setting Bcc `%s`: %s", config.Message_Bcc, err)
+	for _, bcc := range config.Message_Bcc {
+		if err = c.Rcpt(bcc); err != nil {
+			return fmt.Errorf("while setting Bcc `%s`: %s", bcc, err)
 		}
 	}
 
 	for _, to := range config.Message_To {
 		if err = c.Rcpt(to); err != nil {
-			return fmt.Errorf("while setting To `%s`: %s", config.Message_To, err)
+			return fmt.Errorf("while setting To `%s`: %s", to, err)
 		}
 	}
 
@@ -273,9 +307,12 @@ func send(msg string) error {
 }
 
 func main() {
+	// Don't throw an error when encountering an unknown flag (for sendmail compat)
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+
 	flag.Parse()
 
-	if flag.NArg() == 0 {
+	if flag.NArg() == 0 && !config.ScanMessage {
 		fmt.Fprintln(os.Stderr, "Error: no recipients supplied")
 		os.Exit(1)
 	}
