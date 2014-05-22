@@ -40,23 +40,20 @@ type Configuration struct {
 	Authentication_Mechanism     string
 	Authentication_ForceStartTLS bool
 	Message_To                   []string
-	Message_Bcc                  []string
 	Message_From                 string
 	Message_FromName             string
 }
 
 func generateMessageId() string {
 	const CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-	bytes, i, r := make([]byte, 16), 0, rand.New(rand.NewSource(time.Now().UnixNano()))
+	bytes := make([]byte, 16)
 
-	for {
+	for i, r := 0, rand.New(rand.NewSource(time.Now().UnixNano())); i < len(bytes); i++ {
 		bytes[i] = CHARS[r.Intn(len(CHARS))]
-		i++
 
-		if i == len(bytes) {
-			return string(bytes)
-		}
 	}
+
+	return string(bytes)
 }
 
 func (c *Configuration) ParseFile(file string) error {
@@ -111,6 +108,163 @@ func (c *Configuration) Get(k string) reflect.Value {
 	return reflect.Indirect(r).FieldByName(k)
 }
 
+func compose() (*mail.Message, error) {
+	// Make sure we can re-use Stdin even after being consumed by mail.ReadMessage
+	b := bytes.Buffer{}
+	b.ReadFrom(os.Stdin)
+	msg := b.String()
+
+	m, err := mail.ReadMessage(bytes.NewBufferString(msg))
+	if err != nil {
+		if config.ScanMessage {
+			return nil, fmt.Errorf("ScanMessage: cannot parse message: %s", err)
+		}
+
+		// Assume there are no headers in the message
+		m = &mail.Message{
+			Header: mail.Header(textproto.MIMEHeader{}),
+			Body:   bufio.NewReader(bytes.NewBufferString(msg)),
+		}
+	}
+
+	// Make sure all required fields are set
+	if 0 == len(m.Header["From"]) {
+		m.Header["From"] = []string{(&mail.Address{config.Message_FromName, config.Message_From}).String()}
+	}
+
+	if 0 == len(m.Header["To"]) {
+		m.Header["To"] = config.Message_To
+	}
+
+	if 0 == len(m.Header["Date"]) {
+		m.Header["Date"] = []string{time.Now().Format("Mon, 2 Jan 2006 15:04:05 -0700")}
+	}
+
+	if 0 == len(m.Header["Message-Id"]) {
+		m.Header["Message-Id"] = []string{"<GOSSMTP." + generateMessageId() + "@" + config.Hostname + ">"}
+	}
+
+	return m, nil
+}
+
+func connect() (*smtp.Client, error) {
+	c, err := smtp.Dial(fmt.Sprintf("%s:%d", config.Server, config.Port))
+
+	if err != nil {
+		return nil, fmt.Errorf("while connecting to %s on port %d: %s", config.Server, config.Port, err)
+	}
+
+	if err := c.Hello(config.Hostname); err != nil {
+		return nil, fmt.Errorf("while sending Hello `%s`: %s", config.Hostname, err)
+	}
+
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		if err = c.StartTLS(nil); err != nil {
+			return nil, fmt.Errorf("while enabling startTLS: %s", err)
+		}
+	} else if config.Authentication_ForceStartTLS {
+		return nil, fmt.Errorf("server does not support StartTLS")
+	}
+
+	switch config.Authentication_Mechanism {
+	case "CRAM-MD5":
+		auth := smtp.CRAMMD5Auth(
+			config.Authentication_User,
+			config.Authentication_Password,
+		)
+
+		if ok, _ := c.Extension("AUTH"); ok {
+			if err = c.Auth(auth); err != nil {
+				return nil, fmt.Errorf("while authenticating: %s", err)
+			} else if config.Verbose {
+				return nil, fmt.Errorf("Info: using authentication: CRAM-MD5")
+			}
+		}
+
+	case "PLAIN":
+		auth := smtp.PlainAuth(
+			config.Authentication_Identity,
+			config.Authentication_User,
+			config.Authentication_Password,
+			config.Server,
+		)
+
+		if ok, _ := c.Extension("AUTH"); ok {
+			if err = c.Auth(auth); err != nil {
+				return nil, fmt.Errorf("while authenticating: %s", err)
+			} else if config.Verbose {
+				fmt.Println("Info: using authentication: PLAIN")
+			}
+		}
+
+	default:
+		if config.Verbose {
+			fmt.Println("Info: not using authentication")
+		}
+	}
+
+	return c, nil
+}
+
+func send(c *smtp.Client, m *mail.Message) error {
+	if err := c.Mail(config.Message_From); err != nil {
+		return fmt.Errorf("while setting From `%s`: %s", config.Message_From, err)
+	}
+
+	if config.ScanMessage {
+		for _ ,v := range m.Header["To"] {
+			config.Message_To = append(config.Message_To, v)
+		}
+
+		for _ ,v := range m.Header["Cc"] {
+			config.Message_To = append(config.Message_To, v)
+		}
+
+		for _ ,v := range m.Header["Bcc"] {
+			config.Message_To = append(config.Message_To, v)
+		}
+
+		if 0 == len(config.Message_To) {
+			fmt.Fprintln(os.Stderr, "ScanMessage: No recipients found in message-body")
+		}
+	}
+
+	for _, to := range config.Message_To {
+		if err := c.Rcpt(to); err != nil {
+			return fmt.Errorf("while setting Recipient `%s`: %s", to, err)
+		}
+	}
+
+	w, err := c.Data()
+	if err != nil {
+		return fmt.Errorf("while setting Data: %s", err)
+	}
+
+	var s = ""
+	for k, h := range m.Header {
+		for _, v := range h {
+			s += k + ": " + v + "\r\n"
+		}
+	}
+
+	b := bytes.Buffer{}
+	b.ReadFrom(m.Body)
+
+	if _, err := w.Write([]byte(s + "\r\n" + b.String())); err != nil {
+		return fmt.Errorf("while sending message: %s", err)
+	}
+
+	if err = w.Close(); err != nil {
+		return fmt.Errorf("while closing message: %s", err)
+	}
+
+	if err = c.Quit(); err != nil {
+		return fmt.Errorf("while closing connection: %s", err)
+	}
+
+	return nil
+}
+
 func init() {
 	if h, err := os.Hostname(); err == nil {
 		config.Hostname = h
@@ -136,192 +290,20 @@ func init() {
 	flag.StringVar(&config.ConfigFile, "C", config.ConfigFile, "Use alternate configuration file")
 	flag.StringVar(&config.Message_From, "f", config.Message_From, "Manually specify the sender-address of the email")
 	flag.StringVar(&config.Message_FromName, "F", config.Message_FromName, "Manually specify the sender-name of the email")
-	flag.BoolVar(&config.ScanMessage, "t", config.ScanMessage, "Scan message for receipients")
-}
-
-func compose() string {
-	// Make sure we can re-use Stdin even after being consumed by mail.ReadMessage
-	b := bytes.Buffer{}
-	b.ReadFrom(os.Stdin)
-	msg := b.String()
-
-	r := bytes.NewBufferString(msg)
-	m, err := mail.ReadMessage(r)
-	if err != nil {
-		if config.ScanMessage {
-			fmt.Fprintln(os.Stderr, "ScanMessage: cannot parse message")
-		}
-
-		// Assume there are no headers in the message
-		m = &mail.Message{
-			Header: mail.Header(textproto.MIMEHeader{}),
-			Body:   bufio.NewReader(bytes.NewBufferString(msg)),
-		}
-	}
-
-	if config.ScanMessage {
-		var hasRcpt = false
-
-		if 0 != len(m.Header["To"]) {
-			config.Message_To = m.Header["To"]
-			hasRcpt = true
-		}
-
-		if 0 == len(m.Header["Bcc"]) {
-			config.Message_To = m.Header["Bcc"]
-			hasRcpt = true
-		}
-
-		if 0 == len(m.Header["Cc"]) {
-			config.Message_To = m.Header["Cc"]
-			hasRcpt = true
-		}
-
-		if !hasRcpt {
-			fmt.Fprintln(os.Stderr, "ScanMessage: No recipients found in message-body")
-			hasRcpt = true
-		}
-
-		config.Message_To = m.Header["To"]
-	}
-
-	if 0 == len(m.Header["From"]) {
-		m.Header["From"] = []string{(&mail.Address{config.Message_FromName, config.Message_From}).String()}
-	}
-
-	if 0 == len(m.Header["To"]) {
-		m.Header["To"] = config.Message_To
-	}
-
-	if 0 == len(m.Header["Date"]) {
-		m.Header["Date"] = []string{time.Now().Format("Mon, 2 Jan 2006 15:04:05 -0700")}
-	}
-
-	if 0 == len(m.Header["Message-ID"]) {
-		m.Header["Message-Id"] = []string{"<GOSSMTP." + generateMessageId() + "@" + config.Hostname + ">"}
-	}
-
-	var s = ""
-	for k, h := range m.Header {
-		for _, v := range h {
-			s += k + ": " + v + "\r\n"
-		}
-	}
-
-	c := bytes.Buffer{}
-	c.ReadFrom(m.Body)
-
-	return s + "\r\n" + c.String()
-}
-
-func send(msg string) error {
-	c, err := smtp.Dial(fmt.Sprintf("%s:%d", config.Server, config.Port))
-
-	if err != nil {
-		return fmt.Errorf("while connecting to %s on port %d: %s", config.Server, config.Port, err)
-	}
-
-	if err := c.Hello(config.Hostname); err != nil {
-		return fmt.Errorf("while sending Hello `%s`: %s", config.Hostname, err)
-	}
-
-	if ok, _ := c.Extension("STARTTLS"); ok {
-		if err = c.StartTLS(nil); err != nil {
-			return fmt.Errorf("while enabling startTLS: %s", err)
-		}
-	} else if config.Authentication_ForceStartTLS {
-		return fmt.Errorf("server does not support StartTLS")
-	}
-
-	switch config.Authentication_Mechanism {
-	case "CRAM-MD5":
-		auth := smtp.CRAMMD5Auth(
-			config.Authentication_User,
-			config.Authentication_Password,
-		)
-
-		if ok, _ := c.Extension("AUTH"); ok {
-			if err = c.Auth(auth); err != nil {
-				return fmt.Errorf("while authenticating: %s", err)
-			} else if config.Verbose {
-				return fmt.Errorf("Info: using authentication: CRAM-MD5")
-			}
-		}
-
-	case "PLAIN":
-		auth := smtp.PlainAuth(
-			config.Authentication_Identity,
-			config.Authentication_User,
-			config.Authentication_Password,
-			config.Server,
-		)
-
-		if ok, _ := c.Extension("AUTH"); ok {
-			if err = c.Auth(auth); err != nil {
-				return fmt.Errorf("while authenticating: %s", err)
-			} else if config.Verbose {
-				fmt.Println("Info: using authentication: PLAIN")
-			}
-		}
-
-	default:
-		if config.Verbose {
-			fmt.Println("Info: not using authentication")
-		}
-	}
-
-	if err = c.Mail(config.Message_From); err != nil {
-		return fmt.Errorf("while setting From `%s`: %s", config.Message_From, err)
-	}
-
-	for _, bcc := range config.Message_Bcc {
-		if err = c.Rcpt(bcc); err != nil {
-			return fmt.Errorf("while setting Bcc `%s`: %s", bcc, err)
-		}
-	}
-
-	for _, to := range config.Message_To {
-		if err = c.Rcpt(to); err != nil {
-			return fmt.Errorf("while setting To `%s`: %s", to, err)
-		}
-	}
-
-	w, err := c.Data()
-	if err != nil {
-		return fmt.Errorf("while setting Data: %s", err)
-	}
-
-	if _, err = w.Write([]byte(msg)); err != nil {
-		return fmt.Errorf("while sending message: %s", err)
-	}
-
-	if err = w.Close(); err != nil {
-		return fmt.Errorf("while closing message: %s", err)
-	}
-
-	if err = c.Quit(); err != nil {
-		return fmt.Errorf("while closing connection: %s", err)
-	}
-
-	return nil
+	flag.BoolVar(&config.ScanMessage, "t", config.ScanMessage, "Scan message for recipients")
 }
 
 func main() {
 	// Don't throw an error when encountering an unknown flag (for sendmail compat)
-	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
 
 	flag.Parse()
-
-	if flag.NArg() == 0 && !config.ScanMessage {
-		fmt.Fprintln(os.Stderr, "Error: no recipients supplied")
-		os.Exit(1)
-	}
 
 	// Map all local users to Postmaster address
 	config.Message_To = flag.Args()
 	for i, to := range config.Message_To {
 		if -1 == strings.Index(to, "@") {
-			config.Message_To[i] = config.Postmaster
+			config.Message_To[i] = (&mail.Address{to, config.Postmaster}).String()
 		}
 	}
 
@@ -334,12 +316,29 @@ func main() {
 		fmt.Printf("%#v\n", *config)
 	}
 
-	msg := compose()
+	if len(config.Message_To) == 0 && !config.ScanMessage {
+		fmt.Fprintln(os.Stderr, "Error: no recipients supplied")
+		os.Exit(1)
+	}
 
-	if err := send(msg); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+	m, err := compose()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ComposeError: %s\n", err)
+		os.Exit(2)
+	}
+
+	c, err := connect()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ConnectError: %s\n", err)
 		os.Exit(3)
-	} else if config.Verbose {
+	}
+
+	if err := send(c, m); err != nil {
+		fmt.Fprintf(os.Stderr, "SendError: %s\n", err)
+		os.Exit(4)
+	}
+
+	if config.Verbose {
 		fmt.Println("Info: send successful")
 	}
 }
