@@ -206,6 +206,14 @@ func connect() (*smtp.Client, error) {
 	return c, nil
 }
 
+func addRecipient(m *mail.Message, r string) {
+	if a, err := mail.ParseAddress(r); err != nil {
+		fmt.Fprintf(os.Stderr, "ScanMessage: Could not parse recipient `%s`", r)
+	} else {
+		config.Message_To = append(config.Message_To, a.Address)
+	}
+}
+
 func send(c *smtp.Client, m *mail.Message) error {
 	if err := c.Mail(config.Message_From); err != nil {
 		return fmt.Errorf("while setting From `%s`: %s", config.Message_From, err)
@@ -213,15 +221,15 @@ func send(c *smtp.Client, m *mail.Message) error {
 
 	if config.ScanMessage {
 		for _ ,v := range m.Header["To"] {
-			config.Message_To = append(config.Message_To, v)
+			addRecipient(m, v)
 		}
 
 		for _ ,v := range m.Header["Cc"] {
-			config.Message_To = append(config.Message_To, v)
+			addRecipient(m, v)
 		}
 
 		for _ ,v := range m.Header["Bcc"] {
-			config.Message_To = append(config.Message_To, v)
+			addRecipient(m, v)
 		}
 
 		if 0 == len(config.Message_To) {
