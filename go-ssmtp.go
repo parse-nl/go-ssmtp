@@ -361,7 +361,7 @@ func main() {
 		msgId = "message-id "+m.Header["Message-Id"][0]
 	}
 
-	fmt.Printf("Sent mail for %s, uid %d, %s", config.Message_From, os.Getuid(), msgId);
+	fmt.Printf("Sent mail for %s, uid %d, %s\n", config.Message_From, os.Getuid(), msgId);
 
 	if config.Verbose {
 		fmt.Println("Info: send successful")
