@@ -42,6 +42,7 @@ type Configuration struct {
 	Message_To                   []string
 	Message_From                 string
 	Message_FromName             string
+	Message_FromCronDaemon       bool
 }
 
 func generateMessageId() string {
@@ -294,6 +295,9 @@ func init() {
 		config.Postmaster += "@" + config.Hostname
 	}
 
+	var ignore bool
+	flag.BoolVar(&ignore, "i", false, "Ignore")
+	flag.BoolVar(&config.Message_FromCronDaemon, "FCronDaemon", false, "Hack to allow crond to work with flag pkg")
 	flag.BoolVar(&config.Verbose, "v", config.Verbose, "Enable verbose mode")
 	flag.StringVar(&config.ConfigFile, "C", config.ConfigFile, "Use alternate configuration file")
 	flag.StringVar(&config.Message_From, "f", config.Message_From, "Manually specify the sender-address of the email")
@@ -306,6 +310,10 @@ func main() {
 	flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
 
 	flag.Parse()
+
+	if config.Message_FromCronDaemon {
+		config.Message_FromName = "CronDaemon"
+	}
 
 	// Map all local users to Postmaster address
 	config.Message_To = flag.Args()
@@ -345,6 +353,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "SendError: %s\n", err)
 		os.Exit(4)
 	}
+
+	var msgId string
+	if len(m.Header["Subject"]) > 0 {
+		msgId = "subject "+ m.Header["Subject"][0]
+	} else {
+		msgId = "message-id "+m.Header["Message-Id"][0]
+	}
+
+	fmt.Printf("Sent mail for %s, uid %d, %s", config.Message_From, os.Getuid(), msgId);
 
 	if config.Verbose {
 		fmt.Println("Info: send successful")
