@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"github.com/blackjack/syslog"
 )
 
 var config = &Configuration{
@@ -295,6 +296,8 @@ func init() {
 		config.Postmaster += "@" + config.Hostname
 	}
 
+	syslog.Openlog("go-ssmtp", syslog.LOG_PID, syslog.LOG_USER)
+
 	var ignore bool
 	flag.BoolVar(&ignore, "i", false, "Ignore")
 	flag.BoolVar(&config.Message_FromCronDaemon, "FCronDaemon", false, "Hack to allow crond to work with flag pkg")
@@ -339,17 +342,20 @@ func main() {
 
 	m, err := compose()
 	if err != nil {
+		syslog.Errf("ComposeError: %s", err)
 		fmt.Fprintf(os.Stderr, "ComposeError: %s\n", err)
 		os.Exit(2)
 	}
 
 	c, err := connect()
 	if err != nil {
+		syslog.Errf("ConnectError: %s", err)
 		fmt.Fprintf(os.Stderr, "ConnectError: %s\n", err)
 		os.Exit(3)
 	}
 
 	if err := send(c, m); err != nil {
+		syslog.Errf("SendError: %s", err)
 		fmt.Fprintf(os.Stderr, "SendError: %s\n", err)
 		os.Exit(4)
 	}
@@ -361,7 +367,7 @@ func main() {
 		msgId = "message-id "+m.Header["Message-Id"][0]
 	}
 
-	fmt.Printf("Sent mail for %s, uid %d, %s\n", config.Message_From, os.Getuid(), msgId);
+	syslog.Syslogf(syslog.LOG_INFO, "Sent mail for %s, uid %d, %s", config.Message_From, os.Getuid(), msgId);
 
 	if config.Verbose {
 		fmt.Println("Info: send successful")
