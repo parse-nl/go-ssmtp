@@ -367,7 +367,7 @@ func main() {
 		msgId = "message-id "+m.Header["Message-Id"][0]
 	}
 
-	syslog.Syslogf(syslog.LOG_INFO, "Sent mail for %s, uid %d, %s", config.Message_From, os.Getuid(), msgId);
+	syslog.Syslogf(syslog.LOG_INFO, "Sent mail %s for %d; invoked as %#v", msgId, os.Getuid(), os.Args);
 
 	if config.Verbose {
 		fmt.Println("Info: send successful")
