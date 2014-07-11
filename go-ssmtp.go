@@ -52,7 +52,6 @@ func generateMessageId() string {
 
 	for i, r := 0, rand.New(rand.NewSource(time.Now().UnixNano())); i < len(bytes); i++ {
 		bytes[i] = CHARS[r.Intn(len(CHARS))]
-
 	}
 
 	return string(bytes)
@@ -132,6 +131,9 @@ func compose() (*mail.Message, error) {
 	// Make sure all required fields are set
 	if 0 == len(m.Header["From"]) {
 		m.Header["From"] = []string{(&mail.Address{config.Message_FromName, config.Message_From}).String()}
+	} else if from, err := mail.ParseAddress(m.Header["From"][0]); config.ScanMessage && err == nil {
+		// Parse and put in config; to be used by c.Mail
+		config.Message_From = from.Address;
 	}
 
 	if 0 == len(m.Header["To"]) {
@@ -360,7 +362,7 @@ func main() {
 		os.Exit(4)
 	}
 
-	var subject string = "none"
+	var subject string = "(unknown)"
 	if len(m.Header["Subject"]) > 0 {
 		subject = m.Header["Subject"][0]
 	}
