@@ -360,14 +360,12 @@ func main() {
 		os.Exit(4)
 	}
 
-	var msgId string
+	var subject string = "none"
 	if len(m.Header["Subject"]) > 0 {
-		msgId = "subject "+ m.Header["Subject"][0]
-	} else {
-		msgId = "message-id "+m.Header["Message-Id"][0]
+		subject = m.Header["Subject"][0]
 	}
 
-	syslog.Syslogf(syslog.LOG_INFO, "[%d] Sent mail \"%s\"; invoked as %#v", os.Getuid(), msgId, os.Args);
+	syslog.Syslogf(syslog.LOG_INFO, "[%s] Sent mail; subject \"%s\"; from %s; to %#v", m.Header["Message-Id"][0], subject, config.Message_From, config.Message_To);
 
 	if config.Verbose {
 		fmt.Println("Info: send successful")
