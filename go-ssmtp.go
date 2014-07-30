@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"crypto/tls"
 	"github.com/blackjack/syslog"
 )
 
@@ -163,7 +164,7 @@ func connect() (*smtp.Client, error) {
 	}
 
 	if ok, _ := c.Extension("STARTTLS"); ok {
-		if err = c.StartTLS(nil); err != nil {
+			if err = c.StartTLS(&tls.Config{ServerName: config.Server}); err != nil {
 			return nil, fmt.Errorf("while enabling startTLS: %s", err)
 		}
 	} else if config.Authentication_ForceStartTLS {
@@ -302,7 +303,9 @@ func init() {
 
 	var ignore bool
 	flag.BoolVar(&ignore, "i", false, "Ignore")
+	flag.BoolVar(&ignore, "odi", false, "Ignore")
 	flag.BoolVar(&config.Message_FromCronDaemon, "FCronDaemon", false, "Hack to allow crond to work with flag pkg")
+	flag.BoolVar(&config.Message_FromCronDaemon, "FAnacron", false, "Hack to allow crond to work with flag pkg")
 	flag.BoolVar(&config.Verbose, "v", config.Verbose, "Enable verbose mode")
 	flag.StringVar(&config.ConfigFile, "C", config.ConfigFile, "Use alternate configuration file")
 	flag.StringVar(&config.Message_From, "f", config.Message_From, "Manually specify the sender-address of the email")
