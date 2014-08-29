@@ -211,29 +211,25 @@ func connect() (*smtp.Client, error) {
 	return c, nil
 }
 
-func addRecipientsFromHeader(m *mail.Message, i string) {
-	if 0 == len(m.Header[i]) {
-		return
-	}
-
-	if l, err := m.Header.AddressList(i); err != nil {
-		fmt.Fprintf(os.Stderr, "ScanMessage: Could not parse recipients in %s `%s`; %s", i, l, err)
-	} else {
-		for _, v := range l {
-			config.Message_To = append(config.Message_To, v.Address)
-		}
-	}
-}
-
 func send(c *smtp.Client, m *mail.Message) error {
 	if err := c.Mail(config.Message_From); err != nil {
 		return fmt.Errorf("while setting From `%s`: %s", config.Message_From, err)
 	}
 
 	if config.ScanMessage {
-		addRecipientsFromHeader(m, "To")
-		addRecipientsFromHeader(m, "Cc")
-		addRecipientsFromHeader(m, "Bcc")
+		for _, i := range []string{"To", "Cc", "Bcc"} {
+			if 0 == len(m.Header[i]) {
+				continue
+			}
+
+			if l, err := m.Header.AddressList(i); err != nil {
+				fmt.Fprintf(os.Stderr, "ScanMessage: Could not parse recipients in %s `%s`; %s", i, l, err)
+			} else {
+				for _, v := range l {
+					config.Message_To = append(config.Message_To, v.Address)
+				}
+			}
+		}
 
 		if 0 == len(config.Message_To) {
 			fmt.Fprintln(os.Stderr, "ScanMessage: No recipients found in message-body")
