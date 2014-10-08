@@ -317,17 +317,17 @@ func main() {
 		config.Message_FromName = "CronDaemon"
 	}
 
+	if err := config.ParseFile(config.ConfigFile); err != nil {
+		fmt.Fprintf(os.Stderr, "Error while parsing configuration: %s\n", err)
+		os.Exit(2)
+	}
+
 	// Map all local users to Postmaster address
 	config.Message_To = flag.Args()
 	for i, to := range config.Message_To {
 		if -1 == strings.Index(to, "@") {
 			config.Message_To[i] = (&mail.Address{to, config.Postmaster}).String()
 		}
-	}
-
-	if err := config.ParseFile(config.ConfigFile); err != nil {
-		fmt.Fprintf(os.Stderr, "Error while parsing configuration: %s\n", err)
-		os.Exit(2)
 	}
 
 	if config.Verbose {
