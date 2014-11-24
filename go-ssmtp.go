@@ -326,7 +326,7 @@ func main() {
 	config.Message_To = flag.Args()
 	for i, to := range config.Message_To {
 		if -1 == strings.Index(to, "@") {
-			config.Message_To[i] = (&mail.Address{to, config.Postmaster}).String()
+			config.Message_To[i] = config.Postmaster
 		}
 	}
 
