@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"flag"
 	"fmt"
+	"github.com/blackjack/syslog"
 	"math/rand"
 	"net/mail"
 	"net/smtp"
@@ -15,8 +17,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"crypto/tls"
-	"github.com/blackjack/syslog"
 )
 
 var config = &Configuration{
@@ -134,7 +134,7 @@ func compose() (*mail.Message, error) {
 		m.Header["From"] = []string{(&mail.Address{config.Message_FromName, config.Message_From}).String()}
 	} else if from, err := mail.ParseAddress(m.Header["From"][0]); config.ScanMessage && err == nil {
 		// Parse and put in config; to be used by c.Mail
-		config.Message_From = from.Address;
+		config.Message_From = from.Address
 	}
 
 	if 0 == len(m.Header["To"]) {
@@ -164,7 +164,7 @@ func connect() (*smtp.Client, error) {
 	}
 
 	if ok, _ := c.Extension("STARTTLS"); ok {
-			if err = c.StartTLS(&tls.Config{ServerName: config.Server}); err != nil {
+		if err = c.StartTLS(&tls.Config{ServerName: config.Server}); err != nil {
 			return nil, fmt.Errorf("while enabling startTLS: %s", err)
 		}
 	} else if config.Authentication_ForceStartTLS {
@@ -364,7 +364,7 @@ func main() {
 		subject = m.Header["Subject"][0]
 	}
 
-	syslog.Syslogf(syslog.LOG_INFO, "[%s] Sent mail; subject \"%s\"; from %s; to %#v", m.Header["Message-Id"][0], subject, config.Message_From, config.Message_To);
+	syslog.Syslogf(syslog.LOG_INFO, "[%s] Sent mail; subject \"%s\"; from %s; to %#v", m.Header["Message-Id"][0], subject, config.Message_From, config.Message_To)
 
 	if config.Verbose {
 		fmt.Println("Info: send successful")
