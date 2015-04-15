@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/blackjack/syslog"
 	"math/rand"
+	"net"
 	"net/mail"
 	"net/smtp"
 	"net/textproto"
@@ -153,7 +154,14 @@ func compose() (*mail.Message, error) {
 }
 
 func connect() (*smtp.Client, error) {
-	c, err := smtp.Dial(fmt.Sprintf("%s:%d", config.Server, config.Port))
+	// Copied from smtp.Dial; but enable DualStack
+	d := net.Dialer{DualStack: true}
+	conn, err := d.Dial("tcp", fmt.Sprintf("%s:%d", config.Server, config.Port))
+	if err != nil {
+		return nil, fmt.Errorf("while connecting to %s on port %d: %s", config.Server, config.Port, err)
+	}
+
+	c, err := smtp.NewClient(conn, config.Server)
 
 	if err != nil {
 		return nil, fmt.Errorf("while connecting to %s on port %d: %s", config.Server, config.Port, err)
@@ -165,7 +173,7 @@ func connect() (*smtp.Client, error) {
 
 	if ok, _ := c.Extension("STARTTLS"); ok {
 		if err = c.StartTLS(&tls.Config{ServerName: config.Server}); err != nil {
-			return nil, fmt.Errorf("while enabling startTLS: %s", err)
+			return nil, fmt.Errorf("while enabling StartTLS: %s", err)
 		}
 	} else if config.Authentication_ForceStartTLS {
 		return nil, fmt.Errorf("server does not support StartTLS")
