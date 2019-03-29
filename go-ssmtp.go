@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/blackjack/syslog"
 	"math/rand"
-	"net"
 	"net/mail"
 	"net/smtp"
 	"net/textproto"
@@ -21,12 +20,13 @@ import (
 )
 
 var config = &Configuration{
-	Verbose:     false,
-	ConfigFile:  "/etc/go-ssmtp.ini",
-	Port:        25,
-	Server:      "127.0.0.1",
-	Postmaster:  "postmaster",
-	ScanMessage: false,
+	Verbose:         false,
+	ConfigFile:      "/etc/go-ssmtp.ini",
+	Port:            25,
+	Server:          "127.0.0.1",
+	Postmaster:      "postmaster",
+	ScanMessage:     false,
+	Message_Subject: "(no subject)",
 }
 
 type Configuration struct {
@@ -45,6 +45,7 @@ type Configuration struct {
 	Message_To                   []string
 	Message_From                 string
 	Message_FromName             string
+	Message_Subject              string
 	Message_FromCronDaemon       bool
 }
 
@@ -150,18 +151,15 @@ func compose() (*mail.Message, error) {
 		m.Header["Message-Id"] = []string{"<GOSSMTP." + generateMessageId() + "@" + config.Hostname + ">"}
 	}
 
+	if 0 == len(m.Header["Subject"]) {
+		m.Header["Subject"] = []string{config.Message_Subject}
+	}
+
 	return m, nil
 }
 
 func connect() (*smtp.Client, error) {
-	// Copied from smtp.Dial; but enable DualStack
-	d := net.Dialer{DualStack: true}
-	conn, err := d.Dial("tcp", fmt.Sprintf("%s:%d", config.Server, config.Port))
-	if err != nil {
-		return nil, fmt.Errorf("while connecting to %s on port %d: %s", config.Server, config.Port, err)
-	}
-
-	c, err := smtp.NewClient(conn, config.Server)
+	c, err := smtp.Dial(fmt.Sprintf("%s:%d", config.Server, config.Port))
 
 	if err != nil {
 		return nil, fmt.Errorf("while connecting to %s on port %d: %s", config.Server, config.Port, err)
@@ -312,6 +310,7 @@ func init() {
 	flag.StringVar(&config.ConfigFile, "C", config.ConfigFile, "Use alternate configuration file")
 	flag.StringVar(&config.Message_From, "f", config.Message_From, "Manually specify the sender-address of the email")
 	flag.StringVar(&config.Message_FromName, "F", config.Message_FromName, "Manually specify the sender-name of the email")
+	flag.StringVar(&config.Message_Subject, "S", config.Message_Subject, "Manually specify the subject of the email")
 	flag.BoolVar(&config.ScanMessage, "t", config.ScanMessage, "Scan message for recipients")
 }
 
@@ -326,8 +325,7 @@ func main() {
 	}
 
 	if err := config.ParseFile(config.ConfigFile); err != nil {
-		fmt.Fprintf(os.Stderr, "Error while parsing configuration: %s\n", err)
-		os.Exit(2)
+		panic("error: parsing configuration: "+ err.Error())
 	}
 
 	// Map all local users to Postmaster address
@@ -343,36 +341,21 @@ func main() {
 	}
 
 	if len(config.Message_To) == 0 && !config.ScanMessage {
-		fmt.Fprintln(os.Stderr, "Error: no recipients supplied")
-		os.Exit(1)
+		panic("error: no recipients supplied")
 	}
 
-	m, err := compose()
-	if err != nil {
-		syslog.Errf("ComposeError: %s", err)
-		fmt.Fprintf(os.Stderr, "ComposeError: %s\n", err)
-		os.Exit(2)
+	if m, err := compose(); err != nil {
+		syslog.Errf("compose: %s", err)
+		panic("compose: " + err.Error())
+	} else if c, err := connect(); err != nil {
+		syslog.Errf("connect: %s", err)
+		panic("connect: " + err.Error())
+	} else if err := send(c, m); err != nil {
+		syslog.Errf("send: %s", err)
+		panic("send: " + err.Error())
+	} else {
+		syslog.Syslogf(syslog.LOG_INFO, "[%s] Sent mail; subject \"%s\"; from %s; to %#v", m.Header["Message-Id"][0], m.Header["Subject"][0], config.Message_From, config.Message_To)
 	}
-
-	c, err := connect()
-	if err != nil {
-		syslog.Errf("ConnectError: %s", err)
-		fmt.Fprintf(os.Stderr, "ConnectError: %s\n", err)
-		os.Exit(3)
-	}
-
-	if err := send(c, m); err != nil {
-		syslog.Errf("SendError: %s", err)
-		fmt.Fprintf(os.Stderr, "SendError: %s\n", err)
-		os.Exit(4)
-	}
-
-	var subject string = "(unknown)"
-	if len(m.Header["Subject"]) > 0 {
-		subject = m.Header["Subject"][0]
-	}
-
-	syslog.Syslogf(syslog.LOG_INFO, "[%s] Sent mail; subject \"%s\"; from %s; to %#v", m.Header["Message-Id"][0], subject, config.Message_From, config.Message_To)
 
 	if config.Verbose {
 		fmt.Println("Info: send successful")
