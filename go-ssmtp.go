@@ -15,6 +15,7 @@ import (
 	"os/user"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -96,6 +97,14 @@ func (c *Configuration) ParseFile(file string) error {
 				c.Get(k).SetString(v)
 			} else if "bool" == config.Get(k).Type().String() {
 				c.Get(k).SetBool("1" == v)
+			} else if "int" == config.Get(k).Type().String() {
+				if i, err := strconv.ParseInt(v, 10, 64); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: could not parse value `%s` for %s, line %d\n", v, k, n)
+				} else {
+					c.Get(k).SetInt(i)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "Warning: unsupported type %v for %s\n", config.Get(k).Type(), k)
 			}
 		} else {
 			return fmt.Errorf("Failed to parse config, line %d: %s", n, l)
