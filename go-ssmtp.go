@@ -31,23 +31,24 @@ var config = &Configuration{
 }
 
 type Configuration struct {
-	Verbose                      bool
-	ConfigFile                   string
-	Hostname                     string
-	Server                       string
-	Port                         int
-	Postmaster                   string
-	ScanMessage                  bool
-	Authentication_User          string
-	Authentication_Password      string
-	Authentication_Identity      string
-	Authentication_Mechanism     string
-	Authentication_ForceStartTLS bool
-	Message_To                   []string
-	Message_From                 string
-	Message_FromName             string
-	Message_Subject              string
-	Message_FromCronDaemon       bool
+	Verbose                           bool
+	ConfigFile                        string
+	Hostname                          string
+	Server                            string
+	Port                              int
+	Postmaster                        string
+	ScanMessage                       bool
+	Authentication_User               string
+	Authentication_Password           string
+	Authentication_Identity           string
+	Authentication_Mechanism          string
+	Authentication_ForceStartTLS      bool
+	Authentication_InsecureSkipVerify bool
+	Message_To                        []string
+	Message_From                      string
+	Message_FromName                  string
+	Message_Subject                   string
+	Message_FromCronDaemon            bool
 }
 
 func generateMessageId() string {
@@ -179,7 +180,7 @@ func connect() (*smtp.Client, error) {
 	}
 
 	if ok, _ := c.Extension("STARTTLS"); ok {
-		if err = c.StartTLS(&tls.Config{ServerName: config.Server}); err != nil {
+		if err = c.StartTLS(&tls.Config{ServerName: config.Server, InsecureSkipVerify: config.Authentication_InsecureSkipVerify}); err != nil {
 			return nil, fmt.Errorf("while enabling StartTLS: %s", err)
 		}
 	} else if config.Authentication_ForceStartTLS {
@@ -341,7 +342,7 @@ func main() {
 	}
 
 	if err := config.ParseFile(config.ConfigFile); err != nil {
-		panic("error: parsing configuration: "+ err.Error())
+		panic("error: parsing configuration: " + err.Error())
 	}
 
 	// Map all local users to Postmaster address
