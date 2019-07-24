@@ -310,11 +310,21 @@ func init() {
 
 	syslog.Openlog("go-ssmtp", syslog.LOG_PID, syslog.LOG_USER)
 
-	var ignore bool
-	flag.BoolVar(&ignore, "i", false, "Ignore")
-	flag.BoolVar(&ignore, "odi", false, "Ignore")
-	flag.BoolVar(&config.Message_FromCronDaemon, "FCronDaemon", false, "Hack to allow crond to work with flag pkg")
-	flag.BoolVar(&config.Message_FromCronDaemon, "FAnacron", false, "Hack to allow crond to work with flag pkg")
+	// rewrite os.Args so we can parse -FFrom > -F From
+	newArgs := []string{os.Args[0]}
+	for _, arg := range os.Args[1:] {
+		if len(arg) > 2 && arg[0] == '-' {
+			newArgs = append(newArgs, arg[0:2], arg[2:])
+		} else {
+			newArgs = append(newArgs, arg)
+		}
+	}
+	os.Args = newArgs
+
+	var ignoreBool bool
+	var ignoreString string
+	flag.BoolVar(&ignoreBool, "i", false, "Ignore dots alone on lines - ignored")
+	flag.StringVar(&ignoreString, "o", "", "Set option x to the specified - ignored")
 	flag.BoolVar(&config.Verbose, "v", config.Verbose, "Enable verbose mode")
 	flag.StringVar(&config.ConfigFile, "C", config.ConfigFile, "Use alternate configuration file")
 	flag.StringVar(&config.Message_From, "f", config.Message_From, "Manually specify the sender-address of the email")
@@ -324,9 +334,6 @@ func init() {
 }
 
 func main() {
-	// Don't throw an error when encountering an unknown flag (for sendmail compat)
-	flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
-
 	flag.Parse()
 
 	if config.Message_FromCronDaemon {
