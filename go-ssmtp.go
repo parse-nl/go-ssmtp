@@ -143,7 +143,10 @@ func compose() (*mail.Message, error) {
 
 	// Make sure all required fields are set
 	if 0 == len(m.Header["From"]) {
-		m.Header["From"] = []string{(&mail.Address{config.Message_FromName, config.Message_From}).String()}
+		m.Header["From"] = []string{(&mail.Address{
+			Name:    config.Message_FromName,
+			Address: config.Message_From,
+		}).String()}
 	} else if from, err := mail.ParseAddress(m.Header["From"][0]); config.ScanMessage && err == nil {
 		// Parse and put in config; to be used by c.Mail
 		config.Message_From = from.Address
